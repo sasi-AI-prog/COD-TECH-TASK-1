@@ -1,1 +1,125 @@
-# COD-TECH-TASK-1
+import tensorflow as tf #Downloads automatically the dataset
+from tensorflow.keras.datasets import mnist
+import numpy as np
+
+# Load and preprocess the MNIST dataset
+(x_train, _), (_, _) = mnist.load_data()
+x_train = x_train / 255.0 #We normalize the pixel values to the range [0, 1] by dividing by 255.0
+x_train = np.expand_dims(x_train, axis=-1) #add a channel dimension to the images, making each image shape same.
+
+BUFFER_SIZE = 60000
+BATCH_SIZE = 256
+
+train_dataset = tf.data.Dataset.from_tensor_slices(x_train).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
+from tensorflow.keras import layers, models
+
+# Generator Model
+def make_generator_model():
+    model = models.Sequential()
+    model.add(layers.Dense(7*7*256, use_bias=False, input_shape=(100,))) # first layer is a dense layer with 7x7x256 units.
+    model.add(layers.BatchNormalization()) #Normalizes the inputs to each layer.
+    model.add(layers.LeakyReLU()) # Activation function for introducing non-linearity.
+
+    model.add(layers.Reshape((7, 7, 256))) #reshaping the output as same as first layer
+    model.add(layers.Conv2DTranspose(128, (5, 5), strides=(1, 1), padding='same', use_bias=False)) #Transposed convolution layers to upsample the image.
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Conv2DTranspose(1, (5, 5), strides=(2, 2), padding='same', use_bias=False, activation='tanh'))#The final layer uses the tanh activation function to produce an output in the range [-1, 1].
+
+    return model
+# Discriminator Model
+def make_discriminator_model():
+    model = models.Sequential()
+    model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same', input_shape=[28, 28, 1])) #Convolution layers to downsample the image.
+    model.add(layers.LeakyReLU()) #Activation function
+    model.add(layers.Dropout(0.3)) #dropout layer prevent the overfitting
+
+    model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.LeakyReLU())
+    model.add(layers.Dropout(0.3))
+
+    model.add(layers.Flatten()) #flattening the output(reducing the dimensiionility)
+    model.add(layers.Dense(1)) #produces single output
+
+    return model
+# Cross-entropy loss function
+cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True) # binary classification with two classes.
+
+def discriminator_loss(real_output, fake_output): #Calculate the loss for the discriminator by comparing real images to 1 and fake images to 0
+    real_loss = cross_entropy(tf.ones_like(real_output), real_output)
+    fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
+    total_loss = real_loss + fake_loss
+    return total_loss
+
+def generator_loss(fake_output): #Calculate the loss for the generator by comparing fake images with 1's
+    return cross_entropy(tf.ones_like(fake_output), fake_output)
+
+generator = make_generator_model()
+discriminator = make_discriminator_model()
+
+generator_optimizer = tf.keras.optimizers.Adam(1e-4)  #use the Adam optimizer for both the generator and the discriminator.
+discriminator_optimizer = tf.keras.optimizers.Adam(1e-4) #minimize the loss function during the training of neural networks -ADAM OPTIMIZER
+# We will reuse this seed overtime to visualize progress in the animated GIF
+seed = tf.random.normal([num_examples_to_generate, noise_dim]) #Fixed Seed: A fixed noise vector is used to generate images at each epoch.
+# Training step
+@tf.function #Compiles the function into a TensorFlow graph for faster execution
+def train_step(images):
+    noise = tf.random.normal([BATCH_SIZE, noise_dim])
+
+    with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape: #tf.GradientTape records operations for automatic differentiation
+        generated_images = generator(noise, training=True)
+
+        real_output = discriminator(images, training=True)
+        fake_output = discriminator(generated_images, training=True)
+
+        gen_loss = generator_loss(fake_output)
+        disc_loss = discriminator_loss(real_output, fake_output)
+
+    gradients_of_generator = gen_tape.gradient(gen_loss, generator.trainable_variables)
+    gradients_of_discriminator = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
+
+    generator_optimizer.apply_gradients(zip(gradients_of_generator, generator.trainable_variables))
+    discriminator_optimizer.apply_gradients(zip(gradients_of_discriminator, discriminator.trainable_variables))
+from IPython import display
+import matplotlib.pyplot as plt
+# Training loop
+def train(dataset, epochs):
+    for epoch in range(epochs):
+        start = time.time() #Records the start time of the epoch
+
+        for image_batch in dataset: #Iterates over batches of images in the dataset, calling train_step for each batch.
+            train_step(image_batch)
+
+        display.clear_output(wait=True) #Clears the previous output in the notebook to update the display
+        generate_and_save_images(generator, epoch + 1, seed) #ffunction to generate and save images for visualization.
+
+        print(f'Time for epoch {epoch + 1} is {time.time()-start} sec')
+
+    display.clear_output(wait=True)
+    generate_and_save_images(generator, epochs, seed)
+# Generate and save images
+def generate_and_save_images(model, epoch, test_input): #generator creates images from the test input (fixed seed)
+    predictions = model(test_input, training=False)
+
+    fig = plt.figure(figsize=(4, 4)) #new figure for displaying the images.
+
+    for i in range(predictions.shape[0]):
+        plt.subplot(4, 4, i + 1)
+        plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='gray') #Iterates over the generated images and plots them in a grid.
+        plt.axis('off')
+
+    plt.savefig(f'image_at_epoch_{epoch:04d}.png')
+    plt.show()
+
+# Start training
+train(train_dataset, EPOCHS)
+![Screenshot 2024-07-04 055721](https://github.com/sasi-AI-prog/COD-TECH-TASK-1/assets/174678147/897d41ad-b93c-4c13-bedb-b058f540d9dd)
+![Screenshot 2024-07-04 060331](https://github.com/sasi-AI-prog/COD-TECH-TASK-1/assets/174678147/b7501e1c-89c7-48d4-9396-5b6d6347fd6b)
+![Screenshot 2024-07-04 063334](https://github.com/sasi-AI-prog/COD-TECH-TASK-1/assets/174678147/acbadf1a-7685-410b-bcb9-f6ab825f6aa1)
+![Screenshot 2024-07-04 102256](https://github.com/sasi-AI-prog/COD-TECH-TASK-1/assets/174678147/bf96c33f-d3cb-42f2-8c87-a99cfabcba46)
+
